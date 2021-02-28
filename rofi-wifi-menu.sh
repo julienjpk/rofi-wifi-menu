@@ -29,8 +29,8 @@ RWIDTH=$(($(echo "$LIST" | head -n 1 | awk '{print length($0); }')+2))
 LINENUM=$(echo "$LIST" | wc -l)
 # Gives a list of known connections so we can parse it later
 KNOWNCON=$(nmcli connection show)
-# Really janky way of telling if there is currently a connection
-CONSTATE=$(nmcli -fields WIFI g)
+# Really janky way of telling if wifi is up
+CONSTATE=$(nmcli -fields WIFI g | sed 1d)
 
 CURRSSID=$(LANGUAGE=C nmcli -t -f active,ssid dev wifi | awk -F: '$1 ~ /^yes/ {print $2}')
 
@@ -38,27 +38,29 @@ if [[ ! -z $CURRSSID ]]; then
 	HIGHLINE=$(echo  "$(echo "$LIST" | awk -F "[  ]{2,}" '{print $1}' | grep -Fxn -m 1 "$CURRSSID" | awk -F ":" '{print $1}') + 1" | bc )
 fi
 
+if [[ "$CONSTATE" =~ "enabled" ]]; then
+	MENU_OPTIONS="toggle off\nmanual\n$LIST"
+	LINENUM=$((LINENUM+2))
+elif [[ "$CONSTATE" =~ "disabled" ]]; then
+	MENU_OPTIONS="toggle on"
+	LINENUM=$((LINENUM+1))
+fi
+
 # HOPEFULLY you won't need this as often as I do
-# If there are more than 8 SSIDs, the menu will still only have 8 lines
-if [ "$LINENUM" -gt 8 ] && [[ "$CONSTATE" =~ "enabled" ]]; then
-	LINENUM=8
+# If there are more than MAX_LINENUM SSIDs, the menu will still only have MAX_LINENUM lines
+if [ "$LINENUM" -gt $MAX_LINENUM ] && [[ "$CONSTATE" =~ "enabled" ]]; then
+	LINENUM=$MAX_LINENUM
 elif [[ "$CONSTATE" =~ "disabled" ]]; then
 	LINENUM=1
 fi
 
-
-if [[ "$CONSTATE" =~ "enabled" ]]; then
-	TOGGLE="toggle off"
-elif [[ "$CONSTATE" =~ "disabled" ]]; then
-	TOGGLE="toggle on"
-fi
-
 CHENTRY=$(echo -e "$MENU_OPTIONS" | uniq -u | rofi -dmenu -p "Wi-Fi SSID: " -lines "$LINENUM" -a "$HIGHLINE" -width -"$RWIDTH" "${ROFI_ARGS[@]}")
 CHSSID=$(echo "$CHENTRY" | sed  's/\s\{2,\}/\|/g' | awk -F "|" '{print $1}')
-#echo "$CHSSID"
 
+if [ -z "$CHENTRY" ]; then
+	exit 0
 # If the user inputs "manual" as their SSID in the start window, it will bring them to this screen
-if [ "$CHENTRY" = "manual" ] ; then
+elif [ "$CHENTRY" = "manual" ] ; then
 	# Manual entry of the SSID and password (if appplicable)
 	MSSID=$(echo "enter the SSID of the network (SSID,password)" | rofi -dmenu -p "Manual Entry: " -lines 1 "${ROFI_ARGS[@]}")
 	# Separating the password from the entered string
@@ -88,13 +90,18 @@ else
 	fi
 
 	# Parses the list of preconfigured connections to see if it already contains the chosen SSID. This speeds up the connection process
-	if [[ $(echo "$KNOWNCON" | grep "$CHSSID") = "$CHSSID" ]]; then
+	if [[ $(echo "$KNOWNCON" | grep -o "$CHSSID") = "$CHSSID" ]]; then
 		nmcli con up "$CHSSID"
 	else
+		CONN_ARGS=()
 		if [[ "$CHENTRY" =~ "WPA2" ]] || [[ "$CHENTRY" =~ "WEP" ]]; then
-			WIFIPASS=$(echo "if connection is stored, hit enter" | rofi -dmenu -p "password: " -lines 1 -font "$FONT" )
+			PROMPT="if connection is stored, hit enter"
+			WIFIPASS=$(echo "$PROMPT" | rofi -dmenu -p "password: " -lines 1 "${ROFI_ARGS[@]}")
+			if [[ "$WIFIPASS" != "$PROMPT" ]]; then
+				CONN_ARGS+=(password "$WIFIPASS")
+			fi
 		fi
-		nmcli dev wifi con "$CHSSID" password "$WIFIPASS"
+		nmcli dev wifi con "$CHSSID" "${CONN_ARGS[@]}"
 	fi
 
 fi
